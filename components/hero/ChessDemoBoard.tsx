@@ -9,6 +9,7 @@ import { MoveTicker } from "./MoveTicker";
 import { usePgnPlayback } from "@/lib/chess/usePgnPlayback";
 import { useReducedMotion } from "@/hooks/useReducedMotion";
 import { useIsMobile } from "@/hooks/useIsMobile";
+import { useInView } from "@/hooks/useInView";
 import { getInitialFen, getInitialPieces } from "@/lib/chess/pgn";
 import { legalTargets, sideToMove, tryMove } from "@/lib/chess/manualPlay";
 import type { BoardPiece, Square } from "@/lib/chess/types";
@@ -29,7 +30,11 @@ interface ManualState {
 
 /**
  * Live demo board for the hero. Owns:
- * - hover/focus pause (brief improvement #1)
+ * - hover/focus pause AND off-screen pause (brief improvement #1,
+ *   extended) — the timer itself stops, not just the button label, so
+ *   nothing keeps ticking once the hero has scrolled out of view. This
+ *   also removes the one path that could otherwise call
+ *   `scrollIntoView` on an off-screen element from a background timer.
  * - the reduced-motion fallback: a static final position + "Watch
  *   replay" button instead of autoplay (brief improvement #2)
  * - the mobile simplification to a read-only preview ≥768px gate
@@ -42,20 +47,28 @@ interface ManualState {
 export function ChessDemoBoard() {
   const reducedMotion = useReducedMotion();
   const isMobile = useIsMobile();
+  const { ref: viewportRef, inView } = useInView<HTMLDivElement>({ threshold: 0.15, once: false });
+
+  const [userPaused, setUserPaused] = useState(reducedMotion || isMobile);
   const [isHoverPaused, setIsHoverPaused] = useState(false);
   const [manual, setManual] = useState<ManualState | null>(null);
 
-  const playback = usePgnPlayback({
-    game: evergreenGame,
-    intervalMs: 1400,
-    startPaused: reducedMotion || isMobile,
-  });
-
-  const { steps, currentStep, currentIndex, movesRemaining, isPlaying, pause, toggle, skipToEnd, reset } =
+  // The hook always starts paused — this component is the single
+  // source of truth for *why* it's playing or not (user choice, hover,
+  // scroll position, free play), and drives the hook's play()/pause()
+  // from that combined decision below.
+  const playback = usePgnPlayback({ game: evergreenGame, intervalMs: 1400, startPaused: true });
+  const { steps, currentStep, currentIndex, movesRemaining, isPlaying, play, pause, skipToEnd, reset } =
     playback;
 
   const isFinished = currentIndex >= steps.length - 1;
-  const effectivelyPlaying = isPlaying && !isHoverPaused && !manual;
+  const shouldAutoplay = !userPaused && !isHoverPaused && !manual && inView && !isFinished;
+
+  useEffect(() => {
+    if (shouldAutoplay && !isPlaying) play();
+    if (!shouldAutoplay && isPlaying) pause();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [shouldAutoplay]);
 
   // Reduced-motion users get the finished position immediately, with a
   // manual replay control, rather than motion they didn't ask for.
@@ -79,21 +92,13 @@ export function ChessDemoBoard() {
     const pieceAt = pieces.find((piece) => piece.square === square) ?? null;
     const turn = sideToMove(fen);
 
-    // First interaction of the session: pause the running demo and
-    // hand control to the user from wherever the board currently sits.
-    if (!manual) {
-      pause();
-    }
-
     const selected = manual?.selected ?? null;
 
-    // Clicking the already-selected square deselects it.
     if (selected && selected === square) {
       setManual({ ...manual!, selected: null, targets: [] });
       return;
     }
 
-    // Clicking a legal destination completes the move.
     if (selected && (manual?.targets ?? []).includes(square)) {
       const result = tryMove(fen, selected, square);
       if (result) {
@@ -113,9 +118,6 @@ export function ChessDemoBoard() {
       return;
     }
 
-    // Otherwise, select a square only if it holds a piece belonging to
-    // the side whose turn it is — matches normal chess rules and avoids
-    // dead-end selections that can never produce a legal move.
     if (pieceAt && pieceAt.color === turn) {
       setManual({
         fen,
@@ -128,7 +130,6 @@ export function ChessDemoBoard() {
       return;
     }
 
-    // Clicked an empty square or an opponent piece with nothing selected — no-op.
     if (manual) {
       setManual({ ...manual, selected: null, targets: [] });
     }
@@ -138,8 +139,14 @@ export function ChessDemoBoard() {
     setManual(null);
   }
 
+  function handleReplayClick() {
+    setUserPaused(false);
+    reset();
+  }
+
   return (
     <div
+      ref={viewportRef}
       className="flex flex-col gap-4"
       onMouseEnter={() => setIsHoverPaused(true)}
       onMouseLeave={() => setIsHoverPaused(false)}
@@ -164,7 +171,14 @@ export function ChessDemoBoard() {
               interactive={!isMobile}
               selectedSquare={manual?.selected ?? null}
               legalTargets={manual?.targets ?? []}
-              onSquareActivate={isMobile ? undefined : handleSquareActivate}
+              onSquareActivate={
+                isMobile
+                  ? undefined
+                  : (square) => {
+                      if (!manual) pause();
+                      handleSquareActivate(square);
+                    }
+              }
             />
           </div>
           <p aria-live="polite" className="sr-only">
@@ -206,10 +220,10 @@ export function ChessDemoBoard() {
           ) : (
             <>
               <AutoplayControls
-                isPlaying={effectivelyPlaying}
+                isPlaying={isPlaying}
                 isFinished={isFinished}
-                onToggle={toggle}
-                onReplay={reset}
+                onToggle={() => setUserPaused((prev) => !prev)}
+                onReplay={handleReplayClick}
               />
               <MoveCounter movesRemaining={movesRemaining} isFinished={isFinished} />
             </>

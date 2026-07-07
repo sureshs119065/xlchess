@@ -26,7 +26,26 @@ export function MoveTicker({ steps, currentIndex, title, players, year }: MoveTi
   const activeRef = useRef<HTMLLIElement>(null);
 
   useEffect(() => {
-    activeRef.current?.scrollIntoView({ block: "nearest", behavior: "smooth" });
+    const list = listRef.current;
+    const active = activeRef.current;
+    if (!list || !active) return;
+
+    // Deliberately NOT using `active.scrollIntoView()` here: that API
+    // walks up every scrollable ancestor, including the page itself —
+    // if the hero (and this ticker) has been scrolled out of the
+    // viewport while the demo keeps autoplaying in the background,
+    // scrollIntoView would yank the whole page back up to bring this
+    // off-screen element into view. Computing the offset manually and
+    // setting `list.scrollTop` directly confines the effect strictly
+    // to this container, never the document.
+    const listRect = list.getBoundingClientRect();
+    const activeRect = active.getBoundingClientRect();
+
+    if (activeRect.top < listRect.top) {
+      list.scrollTop -= listRect.top - activeRect.top;
+    } else if (activeRect.bottom > listRect.bottom) {
+      list.scrollTop += activeRect.bottom - listRect.bottom;
+    }
   }, [currentIndex]);
 
   return (
