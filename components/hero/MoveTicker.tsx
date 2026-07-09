@@ -10,6 +10,8 @@ interface MoveTickerProps {
   title: string;
   players: string;
   year: number;
+  /** Fired when a move is clicked — jumps the board straight to the position after that move. */
+  onSelectMove: (index: number) => void;
 }
 
 /**
@@ -19,9 +21,18 @@ interface MoveTickerProps {
  * in monospace notation. This borrows that real vernacular instead of
  * an invented stat card, and doubles as a second, denser way to
  * "watch" the game for anyone who prefers reading notation to
- * watching pieces move.
+ * watching pieces move. Every move is also clickable, jumping the
+ * board straight to the position after that move — the way a real
+ * PGN viewer or broadcast replay works, not just a passive log.
  */
-export function MoveTicker({ steps, currentIndex, title, players, year }: MoveTickerProps) {
+export function MoveTicker({
+  steps,
+  currentIndex,
+  title,
+  players,
+  year,
+  onSelectMove,
+}: MoveTickerProps) {
   const listRef = useRef<HTMLOListElement>(null);
   const activeRef = useRef<HTMLLIElement>(null);
 
@@ -59,7 +70,7 @@ export function MoveTicker({ steps, currentIndex, title, players, year }: MoveTi
       <ol
         ref={listRef}
         aria-label="Move list"
-        className="grid auto-rows-min grid-cols-2 gap-x-2 gap-y-1 overflow-y-auto p-3 font-mono text-[13px]"
+        className="grid max-h-[260px] auto-rows-min grid-cols-3 gap-x-2 gap-y-1 overflow-y-auto p-3 font-mono text-[13px] sm:max-h-[340px] lg:max-h-[360px] lg:grid-cols-2"
       >
         {steps.map((step, index) => {
           const isActive = index === currentIndex;
@@ -67,22 +78,27 @@ export function MoveTicker({ steps, currentIndex, title, players, year }: MoveTi
           const showMoveNumber = step.color === "w";
 
           return (
-            <li
-              key={step.ply}
-              ref={isActive ? activeRef : undefined}
-              className={clsx(
-                "flex items-baseline gap-1.5 rounded px-1.5 py-0.5 transition-colors",
-                isActive && "bg-signal-subtle text-signal-500",
-                !isActive && isPast && "text-paper-300",
-                !isActive && !isPast && "text-paper-500"
-              )}
-            >
-              {showMoveNumber && (
-                <span className="text-paper-500" aria-hidden="true">
-                  {step.moveNumber}.
-                </span>
-              )}
-              <span>{step.san}</span>
+            <li key={step.ply} ref={isActive ? activeRef : undefined}>
+              <button
+                type="button"
+                onClick={() => onSelectMove(index)}
+                aria-current={isActive ? "step" : undefined}
+                aria-label={`Jump to move ${step.moveNumber}, ${step.color === "w" ? "White" : "Black"} ${step.san}`}
+                className={clsx(
+                  "flex w-full items-baseline gap-1.5 rounded px-1.5 py-0.5 text-left transition-colors",
+                  "hover:bg-ink-600/60",
+                  isActive && "bg-signal-subtle text-signal-500 hover:bg-signal-subtle",
+                  !isActive && isPast && "text-paper-300",
+                  !isActive && !isPast && "text-paper-500"
+                )}
+              >
+                {showMoveNumber && (
+                  <span className="text-paper-500" aria-hidden="true">
+                    {step.moveNumber}.
+                  </span>
+                )}
+                <span>{step.san}</span>
+              </button>
             </li>
           );
         })}

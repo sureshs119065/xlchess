@@ -23,6 +23,8 @@ interface UsePgnPlaybackResult {
   toggle: () => void;
   /** Jumps straight to the final position — used for the reduced-motion fallback. */
   skipToEnd: () => void;
+  /** Jumps to an arbitrary ply (e.g. clicking a move in the notation ticker), pausing playback. */
+  goToIndex: (index: number) => void;
   reset: () => void;
 }
 
@@ -87,6 +89,15 @@ export function usePgnPlayback({
     setCurrentIndex(steps.length - 1);
   }, [clearTimer, steps.length]);
 
+  const goToIndex = useCallback(
+    (index: number) => {
+      clearTimer();
+      setIsPlaying(false);
+      setCurrentIndex(Math.max(-1, Math.min(index, steps.length - 1)));
+    },
+    [clearTimer, steps.length]
+  );
+
   const reset = useCallback(() => {
     clearTimer();
     setCurrentIndex(-1);
@@ -106,6 +117,7 @@ export function usePgnPlayback({
     pause,
     toggle,
     skipToEnd,
+    goToIndex,
     reset,
   };
 }

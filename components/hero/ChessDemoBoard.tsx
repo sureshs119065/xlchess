@@ -6,12 +6,19 @@ import { ChessBoardSVG } from "@/components/chess/ChessBoardSVG";
 import { MoveCounter } from "./MoveCounter";
 import { AutoplayControls } from "./AutoplayControls";
 import { MoveTicker } from "./MoveTicker";
+import { FreePlayTicker } from "./FreePlayTicker";
 import { usePgnPlayback } from "@/lib/chess/usePgnPlayback";
 import { useReducedMotion } from "@/hooks/useReducedMotion";
 import { useIsMobile } from "@/hooks/useIsMobile";
 import { useInView } from "@/hooks/useInView";
 import { getInitialFen, getInitialPieces } from "@/lib/chess/pgn";
-import { legalTargets, sideToMove, tryMove } from "@/lib/chess/manualPlay";
+import {
+  describeGameEnd,
+  legalTargets,
+  sideToMove,
+  tryMove,
+  type FreePlayStep,
+} from "@/lib/chess/manualPlay";
 import type { BoardPiece, Square } from "@/lib/chess/types";
 import { evergreenGame } from "@/lib/chess/games";
 import { motion as motionTokens } from "@/styles/tokens";
@@ -19,31 +26,28 @@ import { motion as motionTokens } from "@/styles/tokens";
 const INITIAL_PIECES = getInitialPieces();
 const INITIAL_FEN = getInitialFen();
 
+/**
+ * Free play now records its own move history rather than just holding
+ * "the current position". `history` is append-only in the normal case;
+ * `viewIndex` (-1 = the starting position free play began from) is
+ * which position is currently displayed. Clicking an earlier move in
+ * FreePlayTicker only moves `viewIndex` — it doesn't touch `history` —
+ * so browsing back costs nothing. Only playing a *new* move while
+ * `viewIndex` isn't at the end truncates `history` at that point
+ * (see handleSquareActivate), the same "rewind and branch" behavior
+ * a real analysis board gives you.
+ */
 interface ManualState {
-  fen: string;
-  pieces: BoardPiece[];
-  lastMove: { from: Square | null; to: Square | null };
+  startFen: string;
+  startPieces: BoardPiece[];
+  startLastMove: { from: Square | null; to: Square | null };
+  startStatus: string;
+  history: FreePlayStep[];
+  viewIndex: number;
   selected: Square | null;
   targets: Square[];
-  status: string | null;
 }
 
-/**
- * Live demo board for the hero. Owns:
- * - hover/focus pause AND off-screen pause (brief improvement #1,
- *   extended) — the timer itself stops, not just the button label, so
- *   nothing keeps ticking once the hero has scrolled out of view. This
- *   also removes the one path that could otherwise call
- *   `scrollIntoView` on an off-screen element from a background timer.
- * - the reduced-motion fallback: a static final position + "Watch
- *   replay" button instead of autoplay (brief improvement #2)
- * - the mobile simplification to a read-only preview ≥768px gate
- *   (brief improvement #8)
- * - free-play: clicking any piece pauses the demo and hands the board
- *   over to the user, who can then make their own legal moves from
- *   that position (chess.js validates every move; illegal clicks are
- *   silently ignored rather than throwing).
- */
 export function ChessDemoBoard() {
   const reducedMotion = useReducedMotion();
   const isMobile = useIsMobile();
@@ -53,12 +57,8 @@ export function ChessDemoBoard() {
   const [isHoverPaused, setIsHoverPaused] = useState(false);
   const [manual, setManual] = useState<ManualState | null>(null);
 
-  // The hook always starts paused — this component is the single
-  // source of truth for *why* it's playing or not (user choice, hover,
-  // scroll position, free play), and drives the hook's play()/pause()
-  // from that combined decision below.
   const playback = usePgnPlayback({ game: evergreenGame, intervalMs: 1400, startPaused: true });
-  const { steps, currentStep, currentIndex, movesRemaining, isPlaying, play, pause, skipToEnd, reset } =
+  const { steps, currentStep, currentIndex, movesRemaining, isPlaying, play, pause, skipToEnd, goToIndex, reset } =
     playback;
 
   const isFinished = currentIndex >= steps.length - 1;
@@ -70,8 +70,6 @@ export function ChessDemoBoard() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [shouldAutoplay]);
 
-  // Reduced-motion users get the finished position immediately, with a
-  // manual replay control, rather than motion they didn't ask for.
   useEffect(() => {
     if (reducedMotion && currentIndex === -1) {
       skipToEnd();
@@ -83,15 +81,45 @@ export function ChessDemoBoard() {
   const demoFen = currentStep ? currentStep.fen : INITIAL_FEN;
   const demoLastMove = { from: currentStep?.from ?? null, to: currentStep?.to ?? null };
 
-  const displayedPieces = manual ? manual.pieces : demoPieces;
-  const displayedLastMove = manual ? manual.lastMove : demoLastMove;
+  // Derived "what's actually on the board right now" for free play —
+  // computed from history + viewIndex rather than stored redundantly,
+  // so jumping the ticker (which only changes viewIndex) can never get
+  // out of sync with what's displayed.
+  const viewFen = manual
+    ? manual.viewIndex === -1
+      ? manual.startFen
+      : manual.history[manual.viewIndex].fen
+    : demoFen;
+  const viewPieces = manual
+    ? manual.viewIndex === -1
+      ? manual.startPieces
+      : manual.history[manual.viewIndex].pieces
+    : demoPieces;
+  const viewLastMove = manual
+    ? manual.viewIndex === -1
+      ? manual.startLastMove
+      : { from: manual.history[manual.viewIndex].from, to: manual.history[manual.viewIndex].to }
+    : demoLastMove;
+  const viewStatus = manual
+    ? manual.viewIndex === -1
+      ? manual.startStatus
+      : manual.history[manual.viewIndex].status
+    : null;
+  // Only the position actually being viewed can lock the board — if
+  // you've rewound before the checkmate, moving from there is legal
+  // again (that's the whole point of being able to branch).
+  const viewIsGameOver = manual ? manual.viewIndex >= 0 && manual.history[manual.viewIndex].isGameOver : false;
+
+  const displayedPieces = viewPieces;
+  const displayedLastMove = viewLastMove;
 
   function handleSquareActivate(square: Square) {
-    const fen = manual ? manual.fen : demoFen;
-    const pieces = manual ? manual.pieces : demoPieces;
+    if (manual && viewIsGameOver) return;
+
+    const fen = viewFen;
+    const pieces = viewPieces;
     const pieceAt = pieces.find((piece) => piece.square === square) ?? null;
     const turn = sideToMove(fen);
-
     const selected = manual?.selected ?? null;
 
     if (selected && selected === square) {
@@ -102,31 +130,65 @@ export function ChessDemoBoard() {
     if (selected && (manual?.targets ?? []).includes(square)) {
       const result = tryMove(fen, selected, square);
       if (result) {
-        setManual({
+        const moverColor = turn; // whoever just moved, before the turn flips
+        // Truncate at the current view point, not the end of history —
+        // this is the "playing from a rewound position discards what
+        // came after" branch behavior.
+        const priorHistory = manual ? manual.history.slice(0, manual.viewIndex + 1) : [];
+        const ply = priorHistory.length + 1;
+        const moveNumber = Math.ceil(ply / 2);
+        const status = result.isGameOver
+          ? describeGameEnd(result.endReason, moverColor)
+          : result.isCheck
+            ? `Check — ${sideToMove(result.fen) === "w" ? "White" : "Black"} to move`
+            : `${sideToMove(result.fen) === "w" ? "White" : "Black"} to move`;
+
+        const newStep: FreePlayStep = {
+          ply,
+          moveNumber,
+          color: moverColor,
+          san: result.san,
           fen: result.fen,
           pieces: result.pieces,
-          lastMove: { from: result.from, to: result.to },
+          from: result.from,
+          to: result.to,
+          isCheck: result.isCheck,
+          isGameOver: result.isGameOver,
+          endReason: result.endReason,
+          status,
+        };
+
+        const newHistory = [...priorHistory, newStep];
+
+        setManual({
+          ...(manual as ManualState),
+          history: newHistory,
+          viewIndex: newHistory.length - 1,
           selected: null,
           targets: [],
-          status: result.isCheckmate
-            ? "Checkmate"
-            : result.isCheck
-              ? "Check"
-              : `${sideToMove(result.fen) === "w" ? "White" : "Black"} to move`,
         });
       }
       return;
     }
 
     if (pieceAt && pieceAt.color === turn) {
-      setManual({
-        fen,
-        pieces,
-        lastMove: manual?.lastMove ?? demoLastMove,
-        selected: square,
-        targets: legalTargets(fen, square),
-        status: manual?.status ?? `${turn === "w" ? "White" : "Black"} to move`,
-      });
+      setManual(
+        manual
+          ? { ...manual, selected: square, targets: legalTargets(fen, square) }
+          : {
+              // First click of a fresh free-play session, started
+              // mid-demo: the position free play begins from is
+              // wherever the autoplay demo happened to be paused.
+              startFen: demoFen,
+              startPieces: demoPieces,
+              startLastMove: demoLastMove,
+              startStatus: `${turn === "w" ? "White" : "Black"} to move`,
+              history: [],
+              viewIndex: -1,
+              selected: square,
+              targets: legalTargets(fen, square),
+            }
+      );
       return;
     }
 
@@ -139,9 +201,36 @@ export function ChessDemoBoard() {
     setManual(null);
   }
 
+  function startFreshGame() {
+    pause();
+    setManual({
+      startFen: INITIAL_FEN,
+      startPieces: INITIAL_PIECES,
+      startLastMove: { from: null, to: null },
+      startStatus: "White to move",
+      history: [],
+      viewIndex: -1,
+      selected: null,
+      targets: [],
+    });
+  }
+
   function handleReplayClick() {
     setUserPaused(false);
     reset();
+  }
+
+  function handleSelectMove(index: number) {
+    if (manual) setManual(null);
+    setUserPaused(true);
+    goToIndex(index);
+  }
+
+  /** Rewinds free play's own ticker to the position right after a
+   *  given move — pure navigation, doesn't touch `history` itself. */
+  function handleSelectFreePlayMove(index: number) {
+    if (!manual) return;
+    setManual({ ...manual, viewIndex: index, selected: null, targets: [] });
   }
 
   return (
@@ -182,21 +271,28 @@ export function ChessDemoBoard() {
             />
           </div>
           <p aria-live="polite" className="sr-only">
-            {manual?.status ?? currentStep?.label ?? "Starting position"}
+            {manual ? viewStatus : (currentStep?.label ?? "Starting position")}
           </p>
         </motion.div>
 
-        {!isMobile && (
-          <div className="hidden lg:block">
+        <div>
+          {manual ? (
+            <FreePlayTicker
+              history={manual.history}
+              viewIndex={manual.viewIndex}
+              onSelectMove={handleSelectFreePlayMove}
+            />
+          ) : (
             <MoveTicker
               steps={steps}
               currentIndex={currentIndex}
               title={evergreenGame.title}
               players={evergreenGame.players}
               year={evergreenGame.year}
+              onSelectMove={handleSelectMove}
             />
-          </div>
-        )}
+          )}
+        </div>
       </div>
 
       {!isMobile ? (
@@ -207,8 +303,15 @@ export function ChessDemoBoard() {
                 aria-live="polite"
                 className="flex flex-1 items-center justify-center gap-2 rounded-md border border-signal-500/40 bg-signal-subtle px-4 py-2 text-sm font-medium text-signal-500"
               >
-                {manual.status}
+                {viewStatus}
               </div>
+              <button
+                type="button"
+                onClick={startFreshGame}
+                className="rounded-md border border-ink-600 bg-ink-800/80 px-4 py-2 text-sm font-medium text-paper-100 transition-colors hover:border-accent-400 hover:text-accent-400"
+              >
+                New game
+              </button>
               <button
                 type="button"
                 onClick={exitFreePlay}
@@ -231,14 +334,22 @@ export function ChessDemoBoard() {
         </div>
       ) : (
         <p className="text-center font-mono text-xs text-paper-500">
-          {evergreenGame.title} — {evergreenGame.players}, {evergreenGame.year}. Full interactive
-          replay and move-making available on desktop.
+          {evergreenGame.title} — {evergreenGame.players}, {evergreenGame.year}. Tap any move
+          above to jump to that position. Making your own moves is available on desktop.
         </p>
       )}
 
       {!isMobile && !manual && (
         <p className="text-center text-xs text-paper-500">
-          Click any piece to pause the demo and try your own move.
+          Click any piece to pause the demo and try your own move, or{" "}
+          <button
+            type="button"
+            onClick={startFreshGame}
+            className="text-paper-300 underline decoration-ink-600 decoration-2 underline-offset-2 transition-colors hover:text-paper-100 hover:decoration-accent-400"
+          >
+            play a two-player game
+          </button>{" "}
+          from the start.
         </p>
       )}
     </div>

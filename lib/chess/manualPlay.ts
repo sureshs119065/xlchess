@@ -35,6 +35,14 @@ export function legalTargets(fen: string, square: Square): Square[] {
   return moves.map((move) => move.to as Square);
 }
 
+export type GameEndReason =
+  | "checkmate"
+  | "stalemate"
+  | "insufficient-material"
+  | "threefold-repetition"
+  | "fifty-move-rule"
+  | null;
+
 export interface AppliedMove {
   fen: string;
   pieces: BoardPiece[];
@@ -44,6 +52,41 @@ export interface AppliedMove {
   isCheckmate: boolean;
   isCheck: boolean;
   isGameOver: boolean;
+  /** Which rule ended the game, if any — lets the UI say "Draw by
+   * stalemate" instead of a generic "Game over" for every draw type. */
+  endReason: GameEndReason;
+}
+
+function detectEndReason(chess: Chess): GameEndReason {
+  if (chess.isCheckmate()) return "checkmate";
+  if (chess.isStalemate()) return "stalemate";
+  if (chess.isInsufficientMaterial()) return "insufficient-material";
+  if (chess.isThreefoldRepetition()) return "threefold-repetition";
+  if (chess.isDraw()) return "fifty-move-rule"; // remaining draw case chess.js recognizes
+  return null;
+}
+
+/**
+ * Human-readable status for the aria-live region and the free-play
+ * status panel. `lastMoverColor` is whoever just moved (i.e. the
+ * winner on checkmate) — not the side to move next.
+ */
+export function describeGameEnd(endReason: GameEndReason, lastMoverColor: PieceColor): string {
+  const winner = lastMoverColor === "w" ? "White" : "Black";
+  switch (endReason) {
+    case "checkmate":
+      return `Checkmate — ${winner} wins`;
+    case "stalemate":
+      return "Draw — stalemate";
+    case "insufficient-material":
+      return "Draw — insufficient material";
+    case "threefold-repetition":
+      return "Draw — threefold repetition";
+    case "fifty-move-rule":
+      return "Draw — fifty-move rule";
+    default:
+      return "";
+  }
 }
 
 /**
@@ -67,5 +110,6 @@ export function tryMove(fen: string, from: Square, to: Square): AppliedMove | nu
     isCheckmate: chess.isCheckmate(),
     isCheck: chess.inCheck(),
     isGameOver: chess.isGameOver(),
+    endReason: detectEndReason(chess),
   };
 }
