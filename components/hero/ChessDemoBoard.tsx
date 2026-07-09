@@ -85,31 +85,25 @@ export function ChessDemoBoard() {
   // computed from history + viewIndex rather than stored redundantly,
   // so jumping the ticker (which only changes viewIndex) can never get
   // out of sync with what's displayed.
-  const viewFen = manual
-    ? manual.viewIndex === -1
-      ? manual.startFen
-      : manual.history[manual.viewIndex].fen
-    : demoFen;
-  const viewPieces = manual
-    ? manual.viewIndex === -1
-      ? manual.startPieces
-      : manual.history[manual.viewIndex].pieces
-    : demoPieces;
+  // Looked up once here (with the undefined case collapsed to null),
+  // rather than indexing manual.history[manual.viewIndex] repeatedly
+  // below — TS can't prove that index is always in range on its own,
+  // so this is also the single place that needs to know it is.
+  const activeStep: FreePlayStep | null =
+    manual && manual.viewIndex >= 0 ? (manual.history[manual.viewIndex] ?? null) : null;
+
+  const viewFen = manual ? (activeStep ? activeStep.fen : manual.startFen) : demoFen;
+  const viewPieces = manual ? (activeStep ? activeStep.pieces : manual.startPieces) : demoPieces;
   const viewLastMove = manual
-    ? manual.viewIndex === -1
-      ? manual.startLastMove
-      : { from: manual.history[manual.viewIndex].from, to: manual.history[manual.viewIndex].to }
+    ? activeStep
+      ? { from: activeStep.from, to: activeStep.to }
+      : manual.startLastMove
     : demoLastMove;
-  const viewStatus = manual
-    ? manual.viewIndex === -1
-      ? manual.startStatus
-      : manual.history[manual.viewIndex].status
-    : null;
+  const viewStatus = manual ? (activeStep ? activeStep.status : manual.startStatus) : null;
   // Only the position actually being viewed can lock the board — if
   // you've rewound before the checkmate, moving from there is legal
   // again (that's the whole point of being able to branch).
-  const viewIsGameOver = manual ? manual.viewIndex >= 0 && manual.history[manual.viewIndex].isGameOver : false;
-
+  const viewIsGameOver = activeStep ? activeStep.isGameOver : false;
   const displayedPieces = viewPieces;
   const displayedLastMove = viewLastMove;
 

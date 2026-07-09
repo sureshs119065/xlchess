@@ -3,7 +3,27 @@ import type { BoardPiece, PieceColor, Square } from "./types";
 
 const FILES = ["a", "b", "c", "d", "e", "f", "g", "h"] as const;
 const RANKS = [1, 2, 3, 4, 5, 6, 7, 8] as const;
-
+/**
+ * One recorded move in a free-play / two-player session. Mirrors the
+ * shape of `PlaybackStep` (ply, moveNumber, color, san) so it can feed
+ * the same kind of notation ticker, but carries its own `status` since
+ * free-play moves aren't pre-computed from a PGN — each one's status
+ * (check/checkmate/draw text) is derived at the moment it's played.
+ */
+export interface FreePlayStep {
+  ply: number;
+  moveNumber: number;
+  color: PieceColor;
+  san: string;
+  fen: string;
+  pieces: BoardPiece[];
+  from: Square;
+  to: Square;
+  isCheck: boolean;
+  isGameOver: boolean;
+  endReason: GameEndReason;
+  status: string;
+}
 function readBoard(chess: Chess): BoardPiece[] {
   const pieces: BoardPiece[] = [];
   for (const file of FILES) {

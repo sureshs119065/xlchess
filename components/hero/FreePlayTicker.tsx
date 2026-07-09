@@ -3,7 +3,6 @@
 import { useEffect, useRef } from "react";
 import clsx from "clsx";
 import type { FreePlayStep } from "@/lib/chess/manualPlay";
-
 interface FreePlayTickerProps {
   history: FreePlayStep[];
   /** -1 = the position free play started from, before any moves. */
